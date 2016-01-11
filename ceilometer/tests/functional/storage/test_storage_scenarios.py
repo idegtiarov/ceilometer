@@ -2922,6 +2922,7 @@ class GetEventTest(EventTestBase):
         events = [event for event in self.event_conn.get_events(event_filter)]
         self.assertEqual(2, len(events))
         trait_filters[0].update({'key': 'trait_D', 'op': 'le'})
+        raise Exception(events)
         self.assertEqual("Bar", events[1].event_type)
         event_filter = storage.EventFilter(self.start, self.end,
                                            traits_filter=trait_filters)

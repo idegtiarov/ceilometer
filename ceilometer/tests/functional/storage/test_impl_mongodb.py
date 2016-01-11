@@ -48,7 +48,8 @@ class IndexTest(tests_db.TestBase):
         index_name = '%s_ttl' % coll_name
         self.CONF.set_override(ttl_opt, -1, group='database')
         conn.upgrade()
-        self.assertNotIn(index_name, coll.index_information())
+        self.assertNotIn('expireAfterSeconds',
+                         coll.index_information()[index_name])
 
         self.CONF.set_override(ttl_opt, 456789, group='database')
         conn.upgrade()
@@ -75,7 +76,8 @@ class IndexTest(tests_db.TestBase):
 
         self.CONF.set_override(ttl_opt, -1, group='database')
         conn.upgrade()
-        self.assertNotIn(index_name, coll.index_information())
+        self.assertNotIn('expireAfterSeconds', coll.index_information()
+                         [index_name])
 
     def test_meter_ttl_index_present(self):
         self._test_ttl_index_present(self.conn, 'meter',
