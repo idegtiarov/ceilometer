@@ -20,15 +20,30 @@ from oslo_config import fixture as fixture_config
 import oslo_messaging
 from oslotest import base
 from oslotest import mockpatch
+from stevedore import extension
 
 from ceilometer.event.storage import models
 from ceilometer import pipeline
 from ceilometer import publisher
 from ceilometer.publisher import test as test_publisher
 from ceilometer.publisher import utils
+from ceilometer.transformer import event_bracketer
 
 
 class EventPipelineTestCase(base.BaseTestCase):
+
+    def fake_tem_get_ext(self, name):
+        class_name_ext = {
+            'event_bracketer': event_bracketer.EventBracketerTransformer,
+        }
+
+        if name in class_name_ext:
+            return extension.Extension(name, None,
+                                       class_name_ext[name],
+                                       None,
+                                       )
+
+        raise KeyError(name)
 
     def get_publisher(self, url, namespace=''):
         fake_drivers = {'test://': test_publisher.TestPublisher,
@@ -46,7 +61,11 @@ class EventPipelineTestCase(base.BaseTestCase):
     def setUp(self):
         super(EventPipelineTestCase, self).setUp()
         self.p_type = pipeline.EVENT_TYPE
-        self.transformer_manager = None
+
+        self.transformer_manager = mock.MagicMock()
+        self.transformer_manager.__getitem__.side_effect = (
+            self.fake_tem_get_ext
+        )
 
         self.test_event = models.Event(
             message_id=uuid.uuid4(),
@@ -408,3 +427,53 @@ class EventPipelineTestCase(base.BaseTestCase):
             {'ctxt': {}, 'publisher_id': 'compute.vagrant-precise',
              'event_type': 'a', 'payload': [test_data], 'metadata': {}}])
         self.assertEqual(oslo_messaging.NotificationResult.REQUEUE, ret)
+
+    def test_event_bracketer_transformer(self):
+        transformer_cfg = [
+            {
+                'name': 'event_bracketer',
+                'parameters': {
+                    'events': [
+                        {'event_type': 'a'},
+                        {'event_type': 'b'}
+                    ],
+                    'target': {
+                        'event_type': 'c',
+                        'traits': [
+                            {'name': 'latency_time',
+                             'type': models.Trait.INT_TYPE,
+                             'value': '$b(generated) - $a(generated)'},
+                        ]
+                    }
+                }
+            }
+        ]
+        types = ['a', 'b']
+        self._set_pipeline_cfg('transformers', transformer_cfg)
+        self._set_pipeline_cfg('events', types)
+        events = []
+        for i, t in enumerate(types):
+            generate = datetime.datetime.utcnow()
+            events.append(models.Event(
+                message_id=uuid.uuid4(),
+                event_type=t,
+                generated=(generate + datetime.timedelta(hours=i)),
+                traits=[models.Trait(name='instance_id', dtype=1,
+                                     value='test_id')],
+                raw={}
+            ))
+        pipeline_manager = pipeline.PipelineManager(self.pipeline_cfg,
+                                                    self.transformer_manager,
+                                                    self.p_type)
+        pipe = pipeline_manager.pipelines[0]
+        for e in events:
+            pipe.publish_data(None, e)
+
+        publisher = pipeline_manager.pipelines[0].publishers[0]
+        self.assertEqual(1, len(publisher.events))
+        result = publisher.events[0]
+        self.assertEqual('c', result.event_type)
+        self.assertEqual(1, len(result.traits))
+        self.assertEqual('latency_time', result.traits[0].name)
+        self.assertEqual(models.Trait.INT_TYPE, result.traits[0].dtype)
+        self.assertEqual(3600, result.traits[0].value)

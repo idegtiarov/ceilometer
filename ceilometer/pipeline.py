@@ -419,11 +419,27 @@ class EventSink(Sink):
 
     NAMESPACE = 'ceilometer.event.publisher'
 
+    def _transform_event(self, ctxt, event):
+        try:
+            for transformer in self.transformers:
+                event = transformer.handle_sample(ctxt, event)
+                return event
+        except Exception as err:
+            LOG.exception(err)
+
     def publish_events(self, ctxt, events):
-        if events:
+        transformed_events = []
+        if not self.transformers:
+            transformed_events = events
+        else:
+            for event in events:
+                event = self._transform_event(ctxt, event)
+                if event:
+                    transformed_events.append(event)
+        if transformed_events:
             for p in self.publishers:
                 try:
-                    p.publish_events(ctxt, events)
+                    p.publish_events(ctxt, transformed_events)
                 except Exception:
                     LOG.exception(_("Pipeline %(pipeline)s: %(status)s"
                                     " after error from publisher %(pub)s") %
