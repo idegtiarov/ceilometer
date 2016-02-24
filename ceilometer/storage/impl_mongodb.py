@@ -191,11 +191,9 @@ class Connection(pymongo_base.Connection):
     def upgrade(self):
         # Establish indexes
         #
-        # We need variations for user_id vs. project_id because of the
-        # way the indexes are stored in b-trees. The user_id and
-        # project_id values are usually mutually exclusive in the
-        # queries, so the database won't take advantage of an index
-        # including both.
+        # We have to create single (not compound) indexes for all fields that
+        # could be used in query. Compound indexes do not work for queries
+        # without index "prefix" among query parameters.
 
         # create collection if not present
         if 'resource' not in self.db.conn.collection_names():
@@ -203,32 +201,41 @@ class Connection(pymongo_base.Connection):
         if 'meter' not in self.db.conn.collection_names():
             self.db.conn.create_collection('meter')
 
-        name_qualifier = dict(user_id='', project_id='project_')
-        background = dict(user_id=False, project_id=True)
-        for primary in ['user_id', 'project_id']:
-            name = 'meter_%sidx' % name_qualifier[primary]
-            self.db.meter.create_index([
-                ('resource_id', pymongo.ASCENDING),
-                (primary, pymongo.ASCENDING),
-                ('counter_name', pymongo.ASCENDING),
-                ('timestamp', pymongo.ASCENDING),
-            ], name=name, background=background[primary])
+        # NOTE(idegtiarov): before creation of new default indexes check if
+        # there are any old and drop them
+        meter_idxs = self.db.meter.index_information()
+        resource_idxs = self.db.resource.index_information()
+
+        for index_name in meter_idxs:
+            if index_name in ('meter_idx', 'meter_project_idx'):
+                self.db.meter.drop_index(index_name)
+
+        for index_name in resource_idxs:
+            if index_name == 'resource_user_project_timestamp':
+                self.db.resource.drop_index(index_name)
+
+        self.db.meter.create_index([('resource_id', pymongo.ASCENDING)],
+                                   name='dft_meter_resource_idx')
+        self.db.meter.create_index([('user_id', pymongo.ASCENDING)],
+                                   name='dft_meter_user_idx')
+        self.db.meter.create_index([('project_id', pymongo.ASCENDING)],
+                                   name='dft_meter_project_idx')
+        self.db.meter.create_index([('counter_name', pymongo.ASCENDING)],
+                                   name='dft_meter_idx')
 
         self.db.meter.create_index([('timestamp', pymongo.DESCENDING)],
                                    name='timestamp_idx')
 
-        # NOTE(ityaptin) This index covers get_resource requests sorting
-        # and MongoDB uses part of this compound index for different
-        # queries based on any of user_id, project_id, last_sample_timestamp
-        # fields
-        self.db.resource.create_index([('user_id', pymongo.DESCENDING),
-                                       ('project_id', pymongo.DESCENDING),
-                                       ('last_sample_timestamp',
-                                        pymongo.DESCENDING)],
-                                      name='resource_user_project_timestamp',)
+        # NOTE(ityaptin) This indexes covers get_resource requests sorting
+        # and MongoDB these indexes for different queries based on any of
+        # user_id, project_id, last_sample_timestamp fields
+        self.db.resource.create_index([('user_id', pymongo.DESCENDING)],
+                                      name='dft_resource_user_idx')
+        self.db.resource.create_index([('project_id', pymongo.DESCENDING)],
+                                      name='dft_resource_project_idx')
         self.db.resource.create_index([('last_sample_timestamp',
                                         pymongo.DESCENDING)],
-                                      name='last_sample_timestamp_idx')
+                                      name='timestamp_idx')
 
         # update or create time_to_live index
         ttl = cfg.CONF.database.metering_time_to_live

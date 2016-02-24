@@ -59,11 +59,18 @@ class Connection(pymongo_base.Connection):
         # Establish indexes
         # NOTE(idegtiarov): This indexes cover get_events, get_event_types, and
         # get_trait_types requests based on event_type and timestamp fields.
-        self.db.event.create_index(
-            [('event_type', pymongo.ASCENDING),
-             ('timestamp', pymongo.ASCENDING)],
-            name='event_type_idx'
-        )
+        # Before creation new default indexes we need to drop old.
+        event_idxs = self.db.event.index_information()
+
+        for index_name in event_idxs:
+            if index_name == 'event_type_idx':
+                self.db.event.drop_index(index_name)
+
+        self.db.event.create_index([('event_type', pymongo.ASCENDING)],
+                                   name='dft_type_idx')
+        self.db.event.create_index([('message_id', pymongo.ASCENDING)],
+                                   name='dft_message_id_idx')
+
         ttl = cfg.CONF.database.event_time_to_live
         impl_mongodb.Connection.update_ttl(ttl, 'event_ttl', 'timestamp',
                                            self.db.event)
