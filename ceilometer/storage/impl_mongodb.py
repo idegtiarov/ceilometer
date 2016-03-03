@@ -164,27 +164,37 @@ class Connection(pymongo_base.Connection):
         self.upgrade()
 
     @staticmethod
-    def update_ttl(ttl, ttl_index_name, index_field, coll):
+    def update_ttl(ttl_index_name, index_field, coll, ttl=None):
         """Update or create time_to_live indexes.
 
-        :param ttl: time to live in seconds.
         :param ttl_index_name: name of the index we want to update or create.
         :param index_field: field with the index that we need to update.
         :param coll: collection which indexes need to be updated.
+        :param ttl: time to live in seconds.
         """
         indexes = coll.index_information()
+        if ttl is None:
+            if ttl_index_name in indexes:
+                return
+            return coll.create_index([(index_field, pymongo.DESCENDING)],
+                                     name=ttl_index_name)
+
         if ttl <= 0:
             if ttl_index_name in indexes:
-                coll.drop_index(ttl_index_name)
-            return
+                if indexes[ttl_index_name].get('expireAfterSeconds'):
+                    coll.drop_index(ttl_index_name)
+            return coll.create_index([(index_field, pymongo.DESCENDING)],
+                                     name=ttl_index_name)
 
         if ttl_index_name in indexes:
-            return coll.database.command(
-                'collMod', coll.name,
-                index={'keyPattern': {index_field: pymongo.ASCENDING},
-                       'expireAfterSeconds': ttl})
+            if indexes[ttl_index_name].get('expireAfterSeconds'):
+                return coll.database.command(
+                    'collMod', coll.name,
+                    index={'keyPattern': {index_field: pymongo.DESCENDING},
+                           'expireAfterSeconds': ttl})
+            coll.drop_index(ttl_index_name)
 
-        coll.create_index([(index_field, pymongo.ASCENDING)],
+        coll.create_index([(index_field, pymongo.DESCENDING)],
                           expireAfterSeconds=ttl,
                           name=ttl_index_name)
 
@@ -223,8 +233,8 @@ class Connection(pymongo_base.Connection):
         self.db.meter.create_index([('counter_name', pymongo.ASCENDING)],
                                    name='dft_meter_idx')
 
-        self.db.meter.create_index([('timestamp', pymongo.DESCENDING)],
-                                   name='timestamp_idx')
+        # self.db.meter.create_index([('timestamp', pymongo.DESCENDING)],
+        #                            name='timestamp_idx')
 
         # NOTE(ityaptin) This indexes covers get_resource requests sorting
         # and MongoDB these indexes for different queries based on any of
